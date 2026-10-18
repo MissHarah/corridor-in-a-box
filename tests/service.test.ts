@@ -533,6 +533,9 @@ describe("service: drain()", () => {
 
     // drain() resolves once in-flight work is done
     await drainPromise;
+
+    // Nothing is left running, so a grace-timer log would list no keys.
+    expect(s.inFlightKeys()).toEqual([]);
   });
 
   it("drain() resolves immediately when no payments are in-flight", async () => {

@@ -238,6 +238,8 @@ export interface Service {
    * Returns a Promise that resolves once all in-flight executions have settled.
    */
   drain(): Promise<void>;
+  /** Idempotency keys of the `execute()` calls still running right now. */
+  inFlightKeys(): string[];
 }
 
 export function createService(options: ServiceOptions): Service {
@@ -558,7 +560,7 @@ export function createService(options: ServiceOptions): Service {
     });
   }
 
-  return { route, server, drain };
+  return { route, server, drain, inFlightKeys: () => [...inFlight.keys()] };
 }
 
 /** Extract a bearer token from an Authorization header, if present. */
@@ -668,7 +670,7 @@ export function gracefulShutdown(
 
     // 1. Tell the service to drain — /readyz goes 503 and new payments are
     //    blocked immediately, before we wait for anything.
-    const drainPromise = svc ? svc.drain() : Promise.resolve();
+    if (svc) void svc.drain();
 
     // 2. Stop accepting new HTTP connections; wait for existing ones to close.
     srv.close(() => done());
@@ -677,16 +679,13 @@ export function gracefulShutdown(
 
     // 3. Backstop: after the grace window, force-close everything still open.
     const timer = setTimeout(() => {
-      // Log in-flight keys so operators know what was mid-settle when we cut.
+      // Log the keys still running so operators know what was mid-settle when we cut.
       if (svc) {
-        void drainPromise; // ensure the reference is kept
-        // We cannot read the in-flight map from outside createService, but
-        // the drain() promise will already have resolved for completed keys
-        // and will still be pending for any that outlast the grace period.
-        // The logger is not accessible here; write to stderr so it always lands.
+        const keys = svc.inFlightKeys();
         process.stderr.write(
-          `[corridor/service] graceful-shutdown grace period (${graceMs}ms) expired — ` +
-            `force-closing connections. Check for in-flight payments that may need manual review.\n`,
+          `[corridor/service] graceful-shutdown grace period (${graceMs}ms) expired, ` +
+            `force-closing connections. In-flight idempotency keys: ` +
+            `${keys.length > 0 ? keys.join(", ") : "none"}\n`,
         );
       }
       srv.closeAllConnections?.();
